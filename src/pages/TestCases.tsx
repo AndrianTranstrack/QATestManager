@@ -1,10 +1,12 @@
 import React, { useState, useMemo } from 'react';
 import { useTestContext } from '../context/TestContext';
+import { useData } from '../context/DataContext';
 import { Plus, Search, Edit2, Trash2, X, Eye } from 'lucide-react';
-import { TestCase, Priority, TestCaseStatus } from '../types';
+import { TestCase, Priority, TestCaseStatus, TestCaseType } from '../types';
 
 const TestCases: React.FC = () => {
   const { testCases, addTestCase, updateTestCase, deleteTestCase } = useTestContext();
+  const { projects, testSuites } = useData();
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -13,12 +15,15 @@ const TestCases: React.FC = () => {
   const [viewingCase, setViewingCase] = useState<TestCase | null>(null);
 
   const [formData, setFormData] = useState({
+    project_id: '',
+    suite_id: '',
     title: '',
     description: '',
     steps: [''],
     expectedResult: '',
     priority: 'Medium' as Priority,
     status: 'Active' as TestCaseStatus,
+    type: 'Functional' as TestCaseType,
     module: '',
   });
 
@@ -38,23 +43,29 @@ const TestCases: React.FC = () => {
     if (testCase) {
       setEditingId(testCase.id);
       setFormData({
+        project_id: testCase.project_id || '',
+        suite_id: testCase.suite_id || '',
         title: testCase.title,
         description: testCase.description,
         steps: testCase.steps,
         expectedResult: testCase.expectedResult,
         priority: testCase.priority,
         status: testCase.status,
+        type: testCase.type,
         module: testCase.module,
       });
     } else {
       setEditingId(null);
       setFormData({
+        project_id: '',
+        suite_id: '',
         title: '',
         description: '',
         steps: [''],
         expectedResult: '',
         priority: 'Medium',
         status: 'Active',
+        type: 'Functional',
         module: '',
       });
     }

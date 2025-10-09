@@ -1,5 +1,5 @@
 import React from 'react';
-import { LayoutDashboard, FileText, Play, BarChart3, LogOut } from 'lucide-react';
+import { LayoutDashboard, FileText, Play, BarChart3, LogOut, FolderOpen, FolderTree, AlertTriangle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 interface SidebarProps {
@@ -12,8 +12,11 @@ const Sidebar: React.FC<SidebarProps> = ({ currentPage, onNavigate }) => {
 
   const menuItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { id: 'projects', label: 'Projects', icon: FolderOpen },
+    { id: 'suites', label: 'Test Suites', icon: FolderTree },
     { id: 'testcases', label: 'Test Cases', icon: FileText },
     { id: 'runner', label: 'Test Runner', icon: Play },
+    { id: 'defects', label: 'Defects', icon: AlertTriangle },
     { id: 'reports', label: 'Reports', icon: BarChart3 },
   ];
 

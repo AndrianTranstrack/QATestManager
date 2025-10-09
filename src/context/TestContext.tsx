@@ -7,11 +7,13 @@ interface TestContextType {
   testCases: TestCase[];
   testResults: TestResult[];
   loading: boolean;
-  addTestCase: (testCase: Omit<TestCase, 'id' | 'createdAt'>) => Promise<void>;
+  addTestCase: (testCase: Omit<TestCase, 'id' | 'createdAt' | 'user_id'>) => Promise<void>;
   updateTestCase: (id: string, testCase: Partial<TestCase>) => Promise<void>;
   deleteTestCase: (id: string) => Promise<void>;
   addTestResult: (result: Omit<TestResult, 'id'>) => Promise<void>;
   getTestCaseById: (id: string) => TestCase | undefined;
+  getTestCasesByProject: (projectId: string) => TestCase[];
+  getTestCasesBySuite: (suiteId: string) => TestCase[];
   refreshData: () => Promise<void>;
 }
 
@@ -104,12 +106,15 @@ export const TestProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const { error } = await supabase.from('test_cases').insert({
       id: newId,
       user_id: user.id,
+      project_id: testCase.project_id || null,
+      suite_id: testCase.suite_id || null,
       title: testCase.title,
       description: testCase.description,
       steps: testCase.steps,
       expected_result: testCase.expectedResult,
       priority: testCase.priority,
       status: testCase.status,
+      type: testCase.type || 'Functional',
       module: testCase.module,
     });
 
@@ -186,6 +191,14 @@ export const TestProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return testCases.find((tc) => tc.id === id);
   };
 
+  const getTestCasesByProject = (projectId: string) => {
+    return testCases.filter((tc) => tc.project_id === projectId);
+  };
+
+  const getTestCasesBySuite = (suiteId: string) => {
+    return testCases.filter((tc) => tc.suite_id === suiteId);
+  };
+
   return (
     <TestContext.Provider
       value={{
@@ -197,6 +210,8 @@ export const TestProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         deleteTestCase,
         addTestResult,
         getTestCaseById,
+        getTestCasesByProject,
+        getTestCasesBySuite,
         refreshData,
       }}
     >
