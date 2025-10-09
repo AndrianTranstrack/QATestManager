@@ -1,281 +1,392 @@
-import React, { useState, useMemo } from 'react';
-import { useTestContext } from '../context/TestContext';
-import { Download, Share2, Filter, CheckCircle, XCircle, AlertCircle, Eye, ExternalLink } from 'lucide-react';
-import { TestResultStatus } from '../types';
+import React, { useState, useEffect, useMemo } from 'react';
+import { useAuth } from '../context/AuthContext';
+import { useData } from '../context/DataContext';
+import { supabase } from '../lib/supabase';
+import {
+  Download, Share2, Filter, Eye, ChevronDown, ChevronRight, FileText,
+  ExternalLink, Copy, Check, AlertTriangle
+} from 'lucide-react';
+import { TestRun, TestRunResult, Defect } from '../types';
 
 const Reports: React.FC = () => {
-  const { testResults, getTestCaseById } = useTestContext();
-  const [filterStatus, setFilterStatus] = useState<TestResultStatus | 'All'>('All');
-  const [showShareModal, setShowShareModal] = useState(false);
+  const { user } = useAuth();
+  const { projects, testSuites } = useData();
+  const [testRuns, setTestRuns] = useState<TestRun[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedRun, setSelectedRun] = useState<TestRun | null>(null);
+  const [runResults, setRunResults] = useState<TestRunResult[]>([]);
+  const [runDefects, setRunDefects] = useState<Defect[]>([]);
+  const [expandedRuns, setExpandedRuns] = useState<Set<string>>(new Set());
   const [shareLink, setShareLink] = useState('');
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [copied, setCopied] = useState(false);
 
-  const filteredResults = useMemo(() => {
-    if (filterStatus === 'All') return testResults;
-    return testResults.filter((r) => r.status === filterStatus);
-  }, [testResults, filterStatus]);
+  useEffect(() => {
+    if (user) {
+      fetchTestRuns();
+    }
+  }, [user]);
 
-  const handleExportCSV = () => {
-    const headers = ['Test Case ID', 'Test Title', 'Tester Name', 'Status', 'Actual Result', 'Timestamp'];
-    const rows = filteredResults.map((result) => [
-      result.testCaseId,
-      result.testCaseTitle,
-      result.testerName,
-      result.status,
-      result.actualResult,
-      new Date(result.timestamp).toLocaleString(),
-    ]);
+  const fetchTestRuns = async () => {
+    if (!user) return;
 
-    const csvContent = [
-      headers.join(','),
-      ...rows.map((row) => row.map((cell) => `"${cell}"`).join(',')),
-    ].join('\n');
+    setLoading(true);
+    const { data, error } = await supabase
+      .from('test_runs')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false });
 
-    const blob = new Blob([csvContent], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `test-results-${new Date().toISOString().split('T')[0]}.csv`;
-    link.click();
+    if (!error && data) {
+      setTestRuns(data);
+    }
+    setLoading(false);
   };
 
-  const handleShareResults = () => {
-    const shareId = Math.random().toString(36).substring(2, 15);
-    const link = `${window.location.origin}/report/demo/${shareId}`;
-    setShareLink(link);
-    setShowShareModal(true);
+  const fetchRunDetails = async (runId: string) => {
+    const { data: results } = await supabase
+      .from('test_run_results')
+      .select('*')
+      .eq('test_run_id', runId);
+
+    const { data: defects } = await supabase
+      .from('defects')
+      .select('*')
+      .eq('test_run_id', runId);
+
+    if (results) setRunResults(results);
+    if (defects) setRunDefects(defects);
+  };
+
+  const toggleRunExpansion = async (run: TestRun) => {
+    const newExpanded = new Set(expandedRuns);
+    if (newExpanded.has(run.id)) {
+      newExpanded.delete(run.id);
+      setSelectedRun(null);
+    } else {
+      newExpanded.add(run.id);
+      setSelectedRun(run);
+      await fetchRunDetails(run.id);
+    }
+    setExpandedRuns(newExpanded);
+  };
+
+  const handleGenerateShareLink = async (run: TestRun) => {
+    if (!user) return;
+
+    const shareToken = Math.random().toString(36).substring(2) + Date.now().toString(36);
+
+    const { error } = await supabase
+      .from('report_shares')
+      .insert({
+        test_run_id: run.id,
+        share_token: shareToken,
+        created_by: user.id,
+      });
+
+    if (!error) {
+      const link = `${window.location.origin}/shared-report/${shareToken}`;
+      setShareLink(link);
+      setShowShareModal(true);
+    }
   };
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(shareLink);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
-  const getStatusIcon = (status: TestResultStatus) => {
+  const handleExportPDF = async (run: TestRun) => {
+    await fetchRunDetails(run.id);
+
+    const project = projects.find(p => p.id === run.project_id);
+    const suite = testSuites.find(s => s.id === run.suite_id);
+
+    const pdfContent = `
+      TEST RUN REPORT
+
+      Project: ${project?.name || 'Unknown'}
+      Test Suite: ${suite?.name || 'Unknown'}
+      Executed By: ${run.executed_by}
+      Date: ${new Date(run.started_at).toLocaleString()}
+
+      SUMMARY:
+      Total Cases: ${run.total_cases}
+      Passed: ${run.passed_count}
+      Failed: ${run.failed_count}
+      Blocked: ${run.blocked_count}
+
+      Pass Rate: ${((run.passed_count || 0) / (run.total_cases || 1) * 100).toFixed(1)}%
+    `;
+
+    const blob = new Blob([pdfContent], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `test-report-${run.id.substring(0, 8)}-${new Date().toISOString().split('T')[0]}.txt`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const getStatusColor = (status: string) => {
     switch (status) {
       case 'Pass':
-        return <CheckCircle className="text-green-600" size={18} />;
-      case 'Fail':
-        return <XCircle className="text-red-600" size={18} />;
+        return 'text-green-600 bg-green-50 border-green-200';
+      case 'Failed':
+        return 'text-red-600 bg-red-50 border-red-200';
       case 'Blocked':
-        return <AlertCircle className="text-amber-600" size={18} />;
+        return 'text-amber-600 bg-amber-50 border-amber-200';
+      default:
+        return 'text-slate-600 bg-slate-50 border-slate-200';
     }
   };
 
-  const getStatusBadge = (status: TestResultStatus) => {
-    const colors = {
-      Pass: 'bg-green-100 text-green-700',
-      Fail: 'bg-red-100 text-red-700',
-      Blocked: 'bg-amber-100 text-amber-700',
-    };
-
+  if (loading) {
     return (
-      <span className={`px-2 py-1 rounded-full text-xs font-medium ${colors[status]} flex items-center gap-1 w-fit`}>
-        {getStatusIcon(status)}
-        {status}
-      </span>
+      <div className="p-8 flex items-center justify-center">
+        <div className="text-slate-500">Loading reports...</div>
+      </div>
     );
-  };
-
-  const stats = useMemo(() => {
-    const passed = filteredResults.filter((r) => r.status === 'Pass').length;
-    const failed = filteredResults.filter((r) => r.status === 'Fail').length;
-    const blocked = filteredResults.filter((r) => r.status === 'Blocked').length;
-    return { passed, failed, blocked };
-  }, [filteredResults]);
+  }
 
   return (
     <div className="p-8">
-      <div className="flex justify-between items-center mb-8">
-        <div>
-          <h1 className="text-3xl font-bold text-slate-800">Test Reports</h1>
-          <p className="text-slate-500 mt-1">View and export test results</p>
-        </div>
-        <div className="flex gap-3">
-          <button
-            onClick={handleExportCSV}
-            disabled={filteredResults.length === 0}
-            className="px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Download size={18} />
-            Export CSV
-          </button>
-          <button
-            onClick={handleShareResults}
-            disabled={filteredResults.length === 0}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Share2 size={18} />
-            Share Results
-          </button>
-        </div>
+      <div className="mb-8">
+        <h1 className="text-3xl font-bold text-slate-800">Test Reports</h1>
+        <p className="text-slate-500 mt-1">View and manage test execution reports</p>
       </div>
 
-      <div className="grid grid-cols-3 gap-6 mb-6">
-        <div className="bg-white rounded-xl p-6 shadow-sm border border-slate-100">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-slate-500 font-medium">Passed</p>
-              <p className="text-3xl font-bold text-green-600 mt-2">{stats.passed}</p>
-            </div>
-            <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
-              <CheckCircle className="text-green-600" size={24} />
-            </div>
-          </div>
+      {testRuns.length === 0 ? (
+        <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-12 text-center">
+          <FileText size={48} className="mx-auto mb-4 text-slate-300" />
+          <h3 className="text-lg font-semibold text-slate-700 mb-2">No Test Reports Yet</h3>
+          <p className="text-slate-500">Execute test runs to see reports here</p>
         </div>
+      ) : (
+        <div className="space-y-4">
+          {testRuns.map((run) => {
+            const project = projects.find(p => p.id === run.project_id);
+            const suite = testSuites.find(s => s.id === run.suite_id);
+            const isExpanded = expandedRuns.has(run.id);
+            const passRate = ((run.passed_count || 0) / (run.total_cases || 1) * 100).toFixed(1);
 
-        <div className="bg-white rounded-xl p-6 shadow-sm border border-slate-100">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-slate-500 font-medium">Failed</p>
-              <p className="text-3xl font-bold text-red-600 mt-2">{stats.failed}</p>
-            </div>
-            <div className="w-12 h-12 bg-red-100 rounded-lg flex items-center justify-center">
-              <XCircle className="text-red-600" size={24} />
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white rounded-xl p-6 shadow-sm border border-slate-100">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-slate-500 font-medium">Blocked</p>
-              <p className="text-3xl font-bold text-amber-600 mt-2">{stats.blocked}</p>
-            </div>
-            <div className="w-12 h-12 bg-amber-100 rounded-lg flex items-center justify-center">
-              <AlertCircle className="text-amber-600" size={24} />
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="bg-white rounded-xl shadow-sm border border-slate-100 mb-6">
-        <div className="p-4 border-b border-slate-200 flex items-center gap-3">
-          <Filter size={18} className="text-slate-400" />
-          <select
-            value={filterStatus}
-            onChange={(e) => setFilterStatus(e.target.value as TestResultStatus | 'All')}
-            className="px-4 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-          >
-            <option value="All">All Results</option>
-            <option value="Pass">Pass</option>
-            <option value="Fail">Fail</option>
-            <option value="Blocked">Blocked</option>
-          </select>
-          <span className="text-sm text-slate-500">
-            {filteredResults.length} result(s) found
-          </span>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead className="bg-slate-50 border-b border-slate-200">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase">
-                  Test Case ID
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase">
-                  Test Title
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase">
-                  Tester
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase">
-                  Status
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase">
-                  Actual Result
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase">
-                  Evidence
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase">
-                  Timestamp
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200">
-              {filteredResults.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="px-6 py-12 text-center text-slate-500">
-                    No test results available. Run tests to see results here.
-                  </td>
-                </tr>
-              ) : (
-                filteredResults
-                  .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-                  .map((result) => (
-                    <tr key={result.id} className="hover:bg-slate-50 transition-colors">
-                      <td className="px-6 py-4 text-sm font-medium text-blue-600">
-                        {result.testCaseId}
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="text-sm font-medium text-slate-800">
-                          {result.testCaseTitle}
+            return (
+              <div key={run.id} className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
+                <div className="p-6">
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-3 mb-3">
+                        <button
+                          onClick={() => toggleRunExpansion(run)}
+                          className="p-1 hover:bg-slate-100 rounded transition-colors"
+                        >
+                          {isExpanded ? <ChevronDown size={20} /> : <ChevronRight size={20} />}
+                        </button>
+                        <div>
+                          <h3 className="text-lg font-semibold text-slate-800">{run.title}</h3>
+                          <div className="flex items-center gap-4 mt-1 text-sm text-slate-600">
+                            <span className="flex items-center gap-1">
+                              <strong>Project:</strong> {project?.name || 'Unknown'}
+                            </span>
+                            <span className="flex items-center gap-1">
+                              <strong>Suite:</strong> {suite?.name || 'Unknown'}
+                            </span>
+                            <span className="flex items-center gap-1">
+                              <strong>Runner:</strong> {run.runner_name || run.executed_by}
+                            </span>
+                            <span className="flex items-center gap-1">
+                              <strong>Date:</strong> {new Date(run.started_at).toLocaleDateString()}
+                            </span>
+                          </div>
                         </div>
-                      </td>
-                      <td className="px-6 py-4 text-sm text-slate-600">{result.testerName}</td>
-                      <td className="px-6 py-4">{getStatusBadge(result.status)}</td>
-                      <td className="px-6 py-4">
-                        <div className="text-sm text-slate-600 max-w-xs truncate">
-                          {result.actualResult}
+                      </div>
+
+                      <div className="grid grid-cols-5 gap-4 mt-4">
+                        <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
+                          <div className="text-2xl font-bold text-slate-800">{run.total_cases || 0}</div>
+                          <div className="text-xs text-slate-600">Total</div>
                         </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        {result.evidenceUrl ? (
-                          <a
-                            href={result.evidenceUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-blue-600 hover:text-blue-700 text-sm flex items-center gap-1"
-                          >
-                            <Eye size={14} />
-                            {result.evidenceName}
-                          </a>
-                        ) : (
-                          <span className="text-xs text-slate-400">-</span>
-                        )}
-                      </td>
-                      <td className="px-6 py-4 text-sm text-slate-600">
-                        {new Date(result.timestamp).toLocaleString()}
-                      </td>
-                    </tr>
-                  ))
-              )}
-            </tbody>
-          </table>
+                        <div className="bg-green-50 rounded-lg p-3 border border-green-200">
+                          <div className="text-2xl font-bold text-green-600">{run.passed_count || 0}</div>
+                          <div className="text-xs text-green-700">Passed</div>
+                        </div>
+                        <div className="bg-red-50 rounded-lg p-3 border border-red-200">
+                          <div className="text-2xl font-bold text-red-600">{run.failed_count || 0}</div>
+                          <div className="text-xs text-red-700">Failed</div>
+                        </div>
+                        <div className="bg-amber-50 rounded-lg p-3 border border-amber-200">
+                          <div className="text-2xl font-bold text-amber-600">{run.blocked_count || 0}</div>
+                          <div className="text-xs text-amber-700">Blocked</div>
+                        </div>
+                        <div className="bg-blue-50 rounded-lg p-3 border border-blue-200">
+                          <div className="text-2xl font-bold text-blue-600">{passRate}%</div>
+                          <div className="text-xs text-blue-700">Pass Rate</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2 ml-4">
+                      <button
+                        onClick={() => toggleRunExpansion(run)}
+                        className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                        title="View Details"
+                      >
+                        <Eye size={18} />
+                      </button>
+                      <button
+                        onClick={() => handleExportPDF(run)}
+                        className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
+                        title="Export PDF"
+                      >
+                        <Download size={18} />
+                      </button>
+                      <button
+                        onClick={() => handleGenerateShareLink(run)}
+                        className="p-2 text-orange-600 hover:bg-orange-50 rounded-lg transition-colors"
+                        title="Generate Share Link"
+                      >
+                        <Share2 size={18} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {isExpanded && selectedRun?.id === run.id && (
+                  <div className="border-t border-slate-200 bg-slate-50 p-6">
+                    <h4 className="font-semibold text-slate-800 mb-4 flex items-center gap-2">
+                      <FileText size={16} />
+                      Test Case Results
+                    </h4>
+
+                    {runResults.length === 0 ? (
+                      <p className="text-slate-500 text-center py-8">No results found for this test run</p>
+                    ) : (
+                      <div className="space-y-3">
+                        {runResults.map((result) => {
+                          const testCase = result.test_case_snapshot;
+                          const defect = runDefects.find(d => d.id === result.defect_id);
+
+                          return (
+                            <div key={result.id} className="bg-white rounded-lg p-4 border border-slate-200">
+                              <div className="flex items-start justify-between">
+                                <div className="flex-1">
+                                  <div className="flex items-center gap-3 mb-2">
+                                    <span className="text-xs font-mono text-slate-500">
+                                      {testCase?.id || result.test_case_id}
+                                    </span>
+                                    <span className={`px-2 py-1 rounded-full text-xs font-medium border ${getStatusColor(result.status)}`}>
+                                      {result.status}
+                                    </span>
+                                    {testCase?.priority && (
+                                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                                        testCase.priority === 'High' ? 'bg-red-100 text-red-700' :
+                                        testCase.priority === 'Medium' ? 'bg-amber-100 text-amber-700' :
+                                        'bg-green-100 text-green-700'
+                                      }`}>
+                                        {testCase.priority}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <h5 className="font-medium text-slate-800 mb-1">
+                                    {testCase?.title || 'Unknown Test Case'}
+                                  </h5>
+                                  <p className="text-sm text-slate-600 mb-2">
+                                    {testCase?.description || ''}
+                                  </p>
+
+                                  {result.remarks && (
+                                    <div className="mt-2 p-2 bg-slate-50 rounded text-sm text-slate-700">
+                                      <strong>Notes:</strong> {result.remarks}
+                                    </div>
+                                  )}
+
+                                  {result.evidence_name && (
+                                    <div className="mt-2 flex items-center gap-2 text-sm text-blue-600">
+                                      <FileText size={14} />
+                                      <span>Evidence: {result.evidence_name}</span>
+                                    </div>
+                                  )}
+
+                                  {defect && (
+                                    <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-lg">
+                                      <div className="flex items-center gap-2 mb-2">
+                                        <AlertTriangle size={16} className="text-red-600" />
+                                        <span className="font-semibold text-red-800">Linked Defect</span>
+                                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                                          defect.severity === 'Critical' ? 'bg-red-200 text-red-900' :
+                                          defect.severity === 'High' ? 'bg-orange-200 text-orange-900' :
+                                          defect.severity === 'Medium' ? 'bg-amber-200 text-amber-900' :
+                                          'bg-yellow-200 text-yellow-900'
+                                        }`}>
+                                          {defect.severity}
+                                        </span>
+                                      </div>
+                                      <p className="text-sm font-medium text-red-900 mb-1">{defect.title}</p>
+                                      <p className="text-xs text-red-700">{defect.description}</p>
+                                      {defect.assigned_to && (
+                                        <p className="text-xs text-red-600 mt-2">
+                                          Assigned to: {defect.assigned_to}
+                                        </p>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="text-xs text-slate-400 mt-2">
+                                Executed: {new Date(result.executed_at).toLocaleString()}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
-      </div>
+      )}
 
       {showShareModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl max-w-lg w-full">
-            <div className="p-6 border-b border-slate-200">
-              <h2 className="text-xl font-bold text-slate-800">Share Test Results</h2>
-              <p className="text-sm text-slate-500 mt-1">
-                Share this read-only link with your team
-              </p>
+          <div className="bg-white rounded-xl max-w-md w-full p-6">
+            <h3 className="text-xl font-bold text-slate-800 mb-4">Share Report</h3>
+            <p className="text-sm text-slate-600 mb-4">
+              Anyone with this link can view the full test report without logging in.
+            </p>
+            <div className="flex gap-2 mb-4">
+              <input
+                type="text"
+                value={shareLink}
+                readOnly
+                className="flex-1 px-3 py-2 border border-slate-200 rounded-lg text-sm"
+              />
+              <button
+                onClick={handleCopyLink}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
+              >
+                {copied ? <Check size={16} /> : <Copy size={16} />}
+                {copied ? 'Copied' : 'Copy'}
+              </button>
             </div>
-            <div className="p-6 space-y-4">
-              <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 flex items-center gap-3">
-                <ExternalLink size={20} className="text-slate-400 flex-shrink-0" />
-                <code className="text-sm text-slate-700 flex-1 break-all">{shareLink}</code>
-              </div>
-              <div className="flex gap-3">
-                <button
-                  onClick={handleCopyLink}
-                  className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-                >
-                  Copy Link
-                </button>
-                <button
-                  onClick={() => setShowShareModal(false)}
-                  className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
-                >
-                  Close
-                </button>
-              </div>
-              <p className="text-xs text-slate-500 text-center">
-                This is a demo link. In production, this would provide secure, read-only access to test results.
-              </p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setShowShareModal(false)}
+                className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+              >
+                Close
+              </button>
+              <a
+                href={shareLink}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-4 py-2 bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition-colors flex items-center gap-2"
+              >
+                <ExternalLink size={16} />
+                Open Link
+              </a>
             </div>
           </div>
         </div>

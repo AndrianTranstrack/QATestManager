@@ -1,6 +1,8 @@
 import React, { useState, useMemo } from 'react';
 import { useData } from '../context/DataContext';
 import { useTestContext } from '../context/TestContext';
+import { useAuth } from '../context/AuthContext';
+import { supabase } from '../lib/supabase';
 import { Play, Check, AlertTriangle, Circle, ChevronRight, Upload, X } from 'lucide-react';
 import { TestCase, DefectSeverity } from '../types';
 
@@ -16,6 +18,7 @@ interface TestRunResult {
 const TestRunner: React.FC = () => {
   const { projects, testSuites, addDefect } = useData();
   const { testCases, getTestCasesBySuite } = useTestContext();
+  const { user } = useAuth();
 
   const [selectedProject, setSelectedProject] = useState<string>('');
   const [selectedSuite, setSelectedSuite] = useState<string>('');
@@ -26,6 +29,8 @@ const TestRunner: React.FC = () => {
   const [showDefectForm, setShowDefectForm] = useState(false);
   const [currentTestCase, setCurrentTestCase] = useState<TestCase | null>(null);
   const [showSummary, setShowSummary] = useState(false);
+  const [currentTestRunId, setCurrentTestRunId] = useState<string | null>(null);
+  const [runnerName, setRunnerName] = useState<string>('');
 
   const [defectFormData, setDefectFormData] = useState({
     title: '',
@@ -67,15 +72,42 @@ const TestRunner: React.FC = () => {
     setSelectedTestCases(new Set());
   };
 
-  const handleStartRun = () => {
-    if (selectedTestCasesList.length === 0) return;
-    setIsRunning(true);
-    setCurrentTestIndex(0);
-    setTestResults([]);
-    setShowSummary(false);
+  const handleStartRun = async () => {
+    if (selectedTestCasesList.length === 0 || !user) return;
+
+    const suite = testSuites.find(s => s.id === selectedSuite);
+    const project = projects.find(p => p.id === selectedProject);
+
+    const testRunData = {
+      user_id: user.id,
+      project_id: selectedProject,
+      suite_id: selectedSuite,
+      title: `Test Run - ${suite?.name || 'Unknown'} - ${new Date().toLocaleString()}`,
+      status: 'In Progress',
+      executed_by: user.email || 'Unknown',
+      runner_name: runnerName || user.email || 'Unknown',
+      total_cases: selectedTestCasesList.length,
+      passed_count: 0,
+      failed_count: 0,
+      blocked_count: 0,
+    };
+
+    const { data, error } = await supabase
+      .from('test_runs')
+      .insert(testRunData)
+      .select()
+      .single();
+
+    if (!error && data) {
+      setCurrentTestRunId(data.id);
+      setIsRunning(true);
+      setCurrentTestIndex(0);
+      setTestResults([]);
+      setShowSummary(false);
+    }
   };
 
-  const handleTestResult = (status: TestRunStatus) => {
+  const handleTestResult = async (status: TestRunStatus) => {
     const currentTest = selectedTestCasesList[currentTestIndex];
 
     if (status === 'Issue') {
@@ -88,6 +120,18 @@ const TestRunner: React.FC = () => {
       });
       setShowDefectForm(true);
     } else {
+      const mappedStatus = status === 'Pass' ? 'Pass' : status === 'Issue' ? 'Failed' : 'Blocked';
+
+      if (currentTestRunId && user) {
+        await supabase.from('test_run_results').insert({
+          test_run_id: currentTestRunId,
+          test_case_id: currentTest.id,
+          user_id: user.id,
+          status: mappedStatus,
+          test_case_snapshot: currentTest,
+        });
+      }
+
       const result: TestRunResult = {
         testCaseId: currentTest.id,
         status,
@@ -97,10 +141,26 @@ const TestRunner: React.FC = () => {
     }
   };
 
-  const moveToNextTest = () => {
+  const moveToNextTest = async () => {
     if (currentTestIndex < selectedTestCasesList.length - 1) {
       setCurrentTestIndex(currentTestIndex + 1);
     } else {
+      if (currentTestRunId) {
+        const stats = {
+          passed_count: testResults.filter(r => r.status === 'Pass').length + (testResults[testResults.length - 1]?.status === 'Pass' ? 1 : 0),
+          failed_count: testResults.filter(r => r.status === 'Issue').length,
+          blocked_count: testResults.filter(r => r.status === 'Not Run').length,
+        };
+
+        await supabase
+          .from('test_runs')
+          .update({
+            status: 'Completed',
+            completed_at: new Date().toISOString(),
+            ...stats,
+          })
+          .eq('id', currentTestRunId);
+      }
       setIsRunning(false);
       setShowSummary(true);
     }
@@ -109,7 +169,7 @@ const TestRunner: React.FC = () => {
   const handleDefectSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!currentTestCase || !selectedProject) return;
+    if (!currentTestCase || !selectedProject || !user) return;
 
     let evidenceUrl = '';
     let evidenceName = '';
@@ -119,9 +179,10 @@ const TestRunner: React.FC = () => {
       evidenceName = evidenceFile.name;
     }
 
-    await addDefect({
+    const defect = await addDefect({
       project_id: selectedProject,
       test_case_id: currentTestCase.id,
+      test_run_id: currentTestRunId || undefined,
       title: defectFormData.title,
       description: defectFormData.description,
       severity: defectFormData.severity,
@@ -130,6 +191,29 @@ const TestRunner: React.FC = () => {
       evidence_url: evidenceUrl || undefined,
       evidence_name: evidenceName || undefined,
     });
+
+    if (currentTestRunId) {
+      const { data: defectData } = await supabase
+        .from('defects')
+        .select('id')
+        .eq('test_case_id', currentTestCase.id)
+        .eq('test_run_id', currentTestRunId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
+
+      await supabase.from('test_run_results').insert({
+        test_run_id: currentTestRunId,
+        test_case_id: currentTestCase.id,
+        user_id: user.id,
+        status: 'Failed',
+        test_case_snapshot: currentTestCase,
+        evidence_url: evidenceUrl || undefined,
+        evidence_name: evidenceName || undefined,
+        defect_id: defectData?.id,
+        remarks: defectFormData.description,
+      });
+    }
 
     const result: TestRunResult = {
       testCaseId: currentTestCase.id,
@@ -465,6 +549,19 @@ const TestRunner: React.FC = () => {
             <h3 className="font-semibold text-slate-800 mb-4">Configure Test Run</h3>
 
             <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">
+                  Runner Name
+                </label>
+                <input
+                  type="text"
+                  value={runnerName}
+                  onChange={(e) => setRunnerName(e.target.value)}
+                  placeholder="Your name (optional)"
+                  className="w-full px-4 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-2">
                   1. Select Project
