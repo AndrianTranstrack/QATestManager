@@ -192,7 +192,8 @@ const TestCases: React.FC = () => {
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase">ID</th>
                 <th className="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase">Title</th>
-                <th className="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase">Module</th>
+                <th className="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase">Project</th>
+                <th className="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase">Suite</th>
                 <th className="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase">Priority</th>
                 <th className="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase">Status</th>
                 <th className="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase">Actions</th>
@@ -201,12 +202,15 @@ const TestCases: React.FC = () => {
             <tbody className="divide-y divide-slate-200">
               {filteredTestCases.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-6 py-12 text-center text-slate-500">
+                  <td colSpan={7} className="px-6 py-12 text-center text-slate-500">
                     No test cases found. Click "Add Test Case" to create one.
                   </td>
                 </tr>
               ) : (
-                filteredTestCases.map((testCase) => (
+                filteredTestCases.map((testCase) => {
+                  const project = projects.find(p => p.id === testCase.project_id);
+                  const suite = testSuites.find(s => s.id === testCase.suite_id);
+                  return (
                   <tr key={testCase.id} className="hover:bg-slate-50 transition-colors">
                     <td className="px-6 py-4 text-sm font-medium text-slate-800">{testCase.id}</td>
                     <td className="px-6 py-4">
@@ -215,7 +219,14 @@ const TestCases: React.FC = () => {
                         {testCase.description}
                       </div>
                     </td>
-                    <td className="px-6 py-4 text-sm text-slate-600">{testCase.module || '-'}</td>
+                    <td className="px-6 py-4">
+                      {project ? (
+                        <span className="px-2 py-1 bg-blue-100 text-blue-700 text-xs font-medium rounded">
+                          {project.code}
+                        </span>
+                      ) : '-'}
+                    </td>
+                    <td className="px-6 py-4 text-sm text-slate-600">{suite?.name || '-'}</td>
                     <td className="px-6 py-4">
                       <span className={`px-2 py-1 rounded-full text-xs font-medium ${getPriorityColor(testCase.priority)}`}>
                         {testCase.priority}
@@ -252,7 +263,8 @@ const TestCases: React.FC = () => {
                       </div>
                     </td>
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -274,6 +286,53 @@ const TestCases: React.FC = () => {
               </button>
             </div>
             <form onSubmit={handleSubmit} className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">
+                  Project <span className="text-red-500">*</span>
+                </label>
+                <select
+                  required
+                  value={formData.project_id}
+                  onChange={(e) => setFormData({ ...formData, project_id: e.target.value, suite_id: '' })}
+                  className="w-full px-4 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  disabled={!!editingId}
+                >
+                  <option value="">Select Project</option>
+                  {projects.map((project) => (
+                    <option key={project.id} value={project.id}>
+                      {project.name} ({project.code})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">
+                  Test Suite <span className="text-red-500">*</span>
+                </label>
+                <select
+                  required
+                  value={formData.suite_id}
+                  onChange={(e) => setFormData({ ...formData, suite_id: e.target.value })}
+                  className="w-full px-4 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  disabled={!formData.project_id || !!editingId}
+                >
+                  <option value="">Select Test Suite</option>
+                  {testSuites
+                    .filter(s => s.project_id === formData.project_id)
+                    .map((suite) => (
+                      <option key={suite.id} value={suite.id}>
+                        {suite.name}
+                      </option>
+                    ))}
+                </select>
+                {formData.project_id && testSuites.filter(s => s.project_id === formData.project_id).length === 0 && (
+                  <p className="text-xs text-amber-600 mt-1">
+                    No test suites available for this project. Create a test suite first.
+                  </p>
+                )}
+              </div>
+
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-2">Title</label>
                 <input
@@ -297,13 +356,28 @@ const TestCases: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-2">Module/Project</label>
+                <label className="block text-sm font-medium text-slate-700 mb-2">Test Type</label>
+                <select
+                  value={formData.type}
+                  onChange={(e) => setFormData({ ...formData, type: e.target.value as TestCaseType })}
+                  className="w-full px-4 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="Functional">Functional</option>
+                  <option value="Regression">Regression</option>
+                  <option value="Integration">Integration</option>
+                  <option value="Performance">Performance</option>
+                  <option value="Security">Security</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">Module</label>
                 <input
                   type="text"
-                  required
                   value={formData.module}
                   onChange={(e) => setFormData({ ...formData, module: e.target.value })}
                   className="w-full px-4 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="Optional module name"
                 />
               </div>
 
