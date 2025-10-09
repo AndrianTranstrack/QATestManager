@@ -6,11 +6,13 @@ import { TestSuite } from '../types';
 
 const TestSuites: React.FC = () => {
   const { testSuites, projects, addTestSuite, updateTestSuite, deleteTestSuite, getSubSuites } = useData();
-  const { testCases } = useTestContext();
+  const { testCases, loading: testCasesLoading } = useTestContext();
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [selectedProject, setSelectedProject] = useState<string>('');
   const [expandedSuites, setExpandedSuites] = useState<Set<string>>(new Set());
+
+  console.log('TestSuites - testCases:', testCases);
 
   const [formData, setFormData] = useState({
     project_id: '',

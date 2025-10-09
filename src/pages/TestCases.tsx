@@ -6,7 +6,11 @@ import { TestCase, Priority, TestCaseStatus, TestCaseType } from '../types';
 
 const TestCases: React.FC = () => {
   const { testCases, addTestCase, updateTestCase, deleteTestCase } = useTestContext();
-  const { projects, testSuites } = useData();
+  const { projects, testSuites, loading: dataLoading } = useData();
+
+  console.log('TestCases - projects:', projects);
+  console.log('TestCases - testSuites:', testSuites);
+  console.log('TestCases - testCases:', testCases);
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');

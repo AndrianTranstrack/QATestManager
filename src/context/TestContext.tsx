@@ -44,12 +44,16 @@ export const TestProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (!error && data) {
       const formattedData = data.map((tc) => ({
         id: tc.id,
+        project_id: tc.project_id,
+        suite_id: tc.suite_id,
+        user_id: tc.user_id,
         title: tc.title,
         description: tc.description,
         steps: tc.steps as string[],
         expectedResult: tc.expected_result,
         priority: tc.priority,
         status: tc.status,
+        type: tc.type,
         module: tc.module,
         createdAt: tc.created_at,
       }));
